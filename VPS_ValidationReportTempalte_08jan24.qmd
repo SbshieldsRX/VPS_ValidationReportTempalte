@@ -1,0 +1,358 @@
+---
+title: "VPS_ValidationReportTempalte"
+format: 
+  html:
+    fig-align: center
+    fig-width: 4
+    fig-height: 4
+    fig-format: png
+execute:
+  echo: true
+  cache: false
+
+tidy: TRUE
+toc: true
+toc-location: left
+number-sections: true
+number-depth: 3
+
+    
+params:
+  name: 
+    label: "Put your name here"
+    value: "SuperUser"
+    input: text
+  experiment: 
+    label: "Experiment name (used as report title)"
+    value: "Calibration curve 1"
+    input: text
+  experiment_date:
+    label: "Date of experiment"
+    #format: "dd-mm-yyyy"
+    value: "`r Sys.Date()`"
+    input: date
+  comp:
+    label: "Compound"
+    value: "amoxicillin"
+    input: text  
+  conc_units:
+    label: "Concentration units"
+    value: "ppm"
+  #IS: 
+   # label: "Internal standard"
+   # value: "amoxicillin D4"
+  #  input: text
+ # IS_conc:
+ #   label: "Concentration of internal standard"
+ #   value: 1 
+ #   input: text
+
+  matrix:
+    label: "Sample matrix"
+    value: "plasma"
+    input: text
+  operators: 
+    label: "Operators"
+    value: "Pieter-Jan De Sutter"
+    input: text 
+  study: 
+    label: "Study"
+    value: "LMBKA project"
+    input: text
+  file1:
+    label: "Select Excell file (USE TEMPLATE)"
+    value: "Test_input_06jan25.xlsx"
+    input: file
+    placeholder: "Please select a file"
+  #weighing:
+    #label: "Select weighing function"
+    #value: 2
+    #input: radio
+   # choiceNames: [No weighing function, 1/x, 1/x²] 
+   # choiceValues: [1,2,3]
+  StdReplicates:
+    label: "Select Number of Standard Replicates to Process "
+    value: 2
+    input: number
+    min: 1
+    max: 4
+    step: 1
+#  LogC:
+ #   label : "Use log scale for concentration and response plots"
+ #   value: TRUE
+  decimalsC:
+    label: "Decimals for concentration output"
+    value: 2
+    input: slider
+    min: 0
+    max: 4
+    step: 1
+  decimalsR:
+    label: "Decimals for response output"
+    value: 2
+    input: slider
+    min: 0
+    max: 6
+    step: 1
+  SizeFont:
+    label: "Font size tables"
+    input: slider
+    value: 14
+    min: 8
+    max: 16
+    step: 1
+  SizeFig:
+    label: "Font size graphs"
+    input: slider
+    value: 12
+    min: 8
+    max: 16
+    step: 1
+---
+
+```{r}
+#| label: load library
+
+library(tidyverse)
+library(readxl)
+library(kableExtra)
+library(gridExtra)
+library(broom)
+library(car)
+library(plotly)
+library(ggplot2)
+library(viridis)
+library(ggsci)
+library(gt)
+```
+
+```{r}
+#| label: Set params as objects
+# function to calculate %RSD
+rsd <- function(x,
+                as.percentage = TRUE,
+                na.rm = TRUE,
+                adjust = FALSE,
+                adjust.lo = 1) {
+
+  if (adjust) {
+    if (any(x < adjust.lo)) {
+      x <- x - min(x, na.rm = TRUE)
+    }
+  }
+
+  cov <- sd(x, na.rm = na.rm) / mean(x, na.rm = na.rm)
+  if (as.percentage) cov <- cov * 100
+  cov
+}
+
+ #custom function to transpose while preserving names
+transpose_df <- function(df) {
+  t_df <- data.table::transpose(df)
+  colnames(t_df) <- rownames(df)
+  rownames(t_df) <- colnames(df)
+  t_df <- t_df %>%
+    tibble::rownames_to_column(.data = .) %>%
+    tibble::as_tibble(.)
+    return(t_df)}
+
+
+decimalsC <- params$decimalsC
+decimalsR <- params$decimalsR
+Std_Replicates <- params$StdReplicates
+font_size <- params$SizeFont
+plot_size <- params$SizeFig
+```
+
+```{r}
+#|label: read data file
+DATA <- read_excel(params$file1)
+
+#Make a new column that combines type, level, replicate
+DATA <- unite(DATA,c(Type,Level,Replicate), col ="ID", sep="~", remove=FALSE, na.rm = FALSE)
+DATA_ColNames <- colnames(DATA)
+```
+
+```{r}
+#| label: sample average response 
+#Calculate the average response based on the repeated injections
+DATA_MEAN_INJ <- DATA %>% group_by(ID) %>% summarise_at(c("Std_conc", "Response", "Peak_asymmetry", "Rt_analyte"), list(~mean(.),~sd(.), ~rsd(., as.percentage = TRUE)))
+
+DATA_MEAN_INJ <- separate(DATA_MEAN_INJ, col = ID, sep ="~", into = c("Type","Level", "Replicate"), remove = FALSE, )
+```
+
+## Validation Parameters
+
+This section outlines the parameters tested, acceptance criteria, and results.
+
+### Specificity
+
+Procedure: Analyze blank, placebo, spiked samples, and degraded products.
+
+Acceptance Criteria: No interference at the analyte's retention time.
+
+Results: \[Provide chromatograms and qualitative observations.\]
+
+### Linearity and Range
+
+```         
+My name is `r params$name`  \newcommand{\myname}{`r params$name`}   \newpage
+```
+
+Procedure: Prepare and analyze at least 5 concentrations.
+
+Acceptance Criteria: Correlation coefficient (R² ≥ 0.99).
+
+Results: \[Include calibration curve, equation, and R² value.\]
+
+```{r}
+#| label: Linear Regression
+#Spilt the DATA tibble by StdReplicate #, into a list of tibbles
+Tbl_Split <- DATA_MEAN_INJ %>%  
+              filter(Type == "Standard") %>%  
+              split(.$Replicate)
+
+# fit each StdReplicate to a lm, makes a list
+LM_STD_each <- Tbl_Split %>%
+              map(~lm(Std_conc_mean ~ Response_mean, data = .)) 
+GLM_STD_EACH <- LM_STD_each %>%
+                map(~glance(.))
+
+# make a lm of all replicates together
+Tbl_STD_ALL <-  DATA_MEAN_INJ %>%  
+                filter(Type == "Standard")
+
+LM_STD_ALL <-Tbl_STD_ALL %>% 
+  lm(Std_conc_mean ~ Response_mean, data = .) 
+
+GLM_STD_ALL <- glance(LM_STD_ALL) 
+
+              
+
+
+
+```
+
+```{r}
+#| label: Calibration Curve Plots
+#| 
+
+#Plot the data and linear regression, color by Replicate
+STD_CURVE_PLOT <- Tbl_STD_ALL %>% 
+   ggplot( mapping = aes(x= Std_conc_mean, y = Response_mean)) +
+  geom_smooth(method = "lm" ,se=T) 
+
+STD_CURVE_PLOT +   
+    geom_point(aes(color = Replicate)) +
+  geom_smooth(aes(color =Replicate, fill = Replicate), method = "lm",se=F) +   
+  labs(x=  paste("Standard Concentration of ", params$comp, " (", params$conc_units, ")", sep =""), y ="Response", title = "Calibration curve")
+ 
+
+                                                                       
+                                                                       
+                                                                       
+ 
+
+
+```
+
+```{r}
+#| Label: Cal Curve Statistics
+library(dplyr) 
+library(plyr)
+
+# LM coeffiecents  for ALL STD as tibble
+CO_STD_ALL <-LM_STD_ALL %>%
+            coef(.)  %>%
+            tidy(.) %>% 
+            rename(., "ALL" = x, "Statistic" = "names")
+
+# LM coeffiecents  for EACH STD as tibble
+#Create MR function for extracting coefficients
+getCoef <- function(df) {
+          model <- lm(Std_conc_mean ~ Response_mean, data = df)
+          coefs <- model$coef
+          names(coefs) <- c("b", "m")
+          R2 <- glimpse(model$r.squared)
+          names(R2) <- c("R2")
+          pvalue <-glimpse(model$sigma)
+          names(sigma) <- c("Fstat")
+          c(coefs, R2, Fstat)
+          }
+        
+coefs.all <- getCoef(DATA_MEAN_INJ)
+
+#MODEL1 <- tidy(LM_STD_each$`1`)
+CO_STD_EACH <- LM_STD_each %>% 
+                map(tidy(), .)  %>%
+                rename(, "ALL" = x, "Statistic" = "names")
+
+STATS_STD_ALL <- GLM_STD_ALL %>%
+            select(.,"r.squared" , "statistic", "p.value", ) %>%             transpose_df(.) %>% rename(., "ALL" = "1", "Statistic" = "rowname" )
+ Combined_ALL_STD  <- bind_rows(CO_STD_ALL, STATS_STD_ALL)  %>%                      mutate(., Statistic = c("b", "m", "R squared", "F-statistic", "p value"))
+# now add individual Regressions to table 
+# make the tibble into a table 
+
+Combined_ALL_STD %>% 
+  gt() %>%
+  fmt_markdown(columns = everything()) %>%
+fmt_number(columns ="ALL", n_sigfig = 5) %>% 
+  fmt_scientific(columns ="ALL", n_sigfig = 5)
+
+```
+
+Calabration Curve Statistics
+
+### Accuracy
+
+Procedure: Spike analyte in matrix at 80%, 100%, and 120% of target concentration.
+
+Acceptance Criteria: 98–102% recovery.
+
+Results: \[Include % recovery data and statistical summary.\]
+
+### Precision
+
+### Repeatability:
+
+Multiple replicates (n=6) of the same sample analyzed in one day.
+
+### Intermediate Precision:
+
+Tests on different days or with different analysts.
+
+Acceptance Criteria: % RSD ≤ 2%.
+
+Results: \[Provide % RSD for repeatability and intermediate precision.\]
+
+### Limit of Detection (LOD) and Limit of Quantification (LOQ)
+
+Procedure: Based on signal-to-noise ratio or calibration curve.
+
+Acceptance Criteria: Clearly detectable and quantifiable concentrations.
+
+esults: \[Provide calculated LOD and LOQ values.\]
+
+### Robustness
+
+Procedure: Vary method parameters (e.g., flow rate, temperature, pH) within small ranges.
+
+Acceptance Criteria: No significant effect on results.
+
+Results: \[Provide data showing robustness.\]
+
+### System Suitability
+
+Procedure: Assess retention time, theoretical plates, tailing factor, resolution.
+
+Acceptance Criteria: \[Specify, e.g., Rs \> 2, Tailing Factor: 0.8–2.0\].
+
+Results: \[Include system suitability test results.\]
+
+### Stability of Analytical Solutions
+
+Procedure: Test analyte stability over time under specified conditions.
+
+Acceptance Criteria: Analyte remains within ±2% of initial value.
+
+Results: \[Provide stability data.\]
